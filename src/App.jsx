@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import "./App.css"
 
 const CAPICOM_CURRENT_USER_STORE = 2
@@ -18,6 +18,33 @@ function toBase64(arrayBuffer) {
     binary += String.fromCharCode(...chunk)
   }
   return window.btoa(binary)
+}
+
+function base64ToBytes(base64) {
+  const binary = window.atob(base64.replace(/\s/g, ""))
+  const bytes = new Uint8Array(binary.length)
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+
+  return bytes
+}
+
+function getSignatureFileName(fileName) {
+  return `${fileName}.sig`
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 function getSubjectField(subjectName, fieldKeys) {
@@ -70,7 +97,7 @@ async function waitForCryptoPro() {
     const readyPromise = new Promise((resolve, reject) => {
       plugin.then(
         () => resolve(true),
-        (error) => reject(error || new Error("Плагин не инициализировался.")),
+        (error) => reject(error || new Error("Плагин не инициализировался."))
       )
     })
 
@@ -79,7 +106,7 @@ async function waitForCryptoPro() {
 
   if (!plugin || typeof plugin.CreateObjectAsync !== "function") {
     throw new Error(
-      "Плагин установлен, но API CreateObjectAsync недоступен. Обычно это означает, что не поднят нативный компонент CryptoPro CSP/Extension Host или браузеру не даны права на localhost.",
+      "Плагин установлен, но API CreateObjectAsync недоступен. Обычно это означает, что не поднят нативный компонент CryptoPro CSP/Extension Host или браузеру не даны права на localhost."
     )
   }
 
@@ -104,33 +131,29 @@ function executeCades(cadesplugin, generatorFn) {
         cadesplugin.async_spawn(function* () {
           const result = yield* generatorFn()
           resolve(result)
-        }),
+        })
       )
       .catch(reject)
   })
 
   const timeoutTask = new Promise((_, reject) => {
-    window.setTimeout(() => reject(new Error("Операция CryptoPro выполняется слишком долго.")), PLUGIN_WAIT_TIMEOUT_MS)
+    window.setTimeout(
+      () => reject(new Error("Операция CryptoPro выполняется слишком долго.")),
+      PLUGIN_WAIT_TIMEOUT_MS
+    )
   })
 
   return Promise.race([cadesTask, timeoutTask])
 }
 
-function getEnvironmentSnapshot() {
-  const pluginScript = document.querySelector('script[src*="cadesplugin_api.js"]')
-
-  return [
-    `URL: ${window.location.origin}`,
-    `isSecureContext: ${String(window.isSecureContext)}`,
-    `script cadesplugin_api.js: ${pluginScript ? "найден" : "не найден"}`,
-    `window.cadesplugin: ${typeof window.cadesplugin}`,
-  ]
-}
-
 function readCertificatesFromStore(cadesplugin) {
   return executeCades(cadesplugin, function* () {
     const store = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store")
-    yield store.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE, CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED)
+    yield store.Open(
+      CAPICOM_CURRENT_USER_STORE,
+      CAPICOM_MY_STORE,
+      CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED
+    )
 
     const certs = yield store.Certificates
     const count = yield certs.Count
@@ -155,7 +178,7 @@ function readCertificatesFromStore(cadesplugin) {
         subjectName,
         hasPrivateKey,
         displayName: `ФИО: ${ownerInfo.fullName}; email: ${ownerInfo.email}; срок: с ${new Date(
-          validFromDate,
+          validFromDate
         ).toLocaleDateString("ru-RU")} по ${new Date(validToDate).toLocaleDateString("ru-RU")})${
           hasPrivateKey ? "" : " - без закрытого ключа"
         }`,
@@ -173,10 +196,14 @@ function readCertificatesFromStore(cadesplugin) {
   })
 }
 
-function createDetachedSignature(cadesplugin, thumbprint, base64Data) {
+function createCadesDetachedSignature(cadesplugin, thumbprint, base64Data) {
   return executeCades(cadesplugin, function* () {
     const store = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store")
-    yield store.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE, CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED)
+    yield store.Open(
+      CAPICOM_CURRENT_USER_STORE,
+      CAPICOM_MY_STORE,
+      CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED
+    )
 
     const certs = yield store.Certificates
     const found = yield certs.Find(0, thumbprint)
@@ -209,12 +236,10 @@ export default function App() {
   const [certificates, setCertificates] = useState([])
   const [selectedThumbprint, setSelectedThumbprint] = useState("")
   const [status, setStatus] = useState("Ожидание проверки плагина")
-  const [diagnostics, setDiagnostics] = useState([])
   const [documentFile, setDocumentFile] = useState(null)
   const [signature, setSignature] = useState("")
   const [isLoadingCertificates, setIsLoadingCertificates] = useState(false)
   const [isSigning, setIsSigning] = useState(false)
-  const [environmentInfo, setEnvironmentInfo] = useState([])
 
   const selectedCertificateLabel = useMemo(() => {
     if (!selectedThumbprint) return "Сертификат не выбран"
@@ -222,83 +247,20 @@ export default function App() {
     return selected ? selected.displayName : "Сертификат не выбран"
   }, [certificates, selectedThumbprint])
 
-  function addDiagnostic(message) {
-    const timestamp = new Date().toLocaleTimeString("ru-RU")
-    setDiagnostics((prev) => [`[${timestamp}] ${message}`, ...prev].slice(0, 20))
-  }
-
-  function runEnvironmentCheck() {
-    const lines = getEnvironmentSnapshot()
-
-    if (!window.cadesplugin) {
-      lines.push("Диагноз: расширение/плагин не инициализировал API на этой странице.")
-      setEnvironmentInfo(lines)
-      return
-    }
-
-    lines.push(`cadesplugin.CreateObjectAsync: ${typeof window.cadesplugin?.CreateObjectAsync}`)
-    lines.push(`cadesplugin.then: ${typeof window.cadesplugin?.then}`)
-
-    if (typeof window.cadesplugin?.CreateObjectAsync !== "function") {
-      lines.push(
-        "Диагноз: API объекта отсутствует. Обычно не запущен native host CryptoPro CSP или заблокирована связка расширения.",
-      )
-      setEnvironmentInfo(lines)
-      return
-    }
-
-    waitForCryptoPro()
-      .then(({ cadesplugin }) =>
-        executeCades(cadesplugin, function* () {
-          const about = yield cadesplugin.CreateObjectAsync("CAdESCOM.About")
-          const cspName = yield about.CSPName(80)
-
-          return {
-            cspName: String(cspName),
-          }
-        }),
-      )
-      .then((checkResult) => {
-        lines.push("Пробный вызов CreateObjectAsync: успешно.")
-        lines.push(`CSPName: ${checkResult.cspName}`)
-        lines.push("Диагноз: окружение готово, проблема не в инициализации API.")
-      })
-      .catch((error) => {
-        lines.push(`Пробный вызов COM-объекта: ошибка: ${getErrorMessage(error)}`)
-        lines.push("Диагноз: расширение есть, но нативный слой CryptoPro недоступен/не отвечает.")
-      })
-      .finally(() => setEnvironmentInfo(lines))
-  }
-
-  useEffect(() => {
-    runEnvironmentCheck()
-  }, [])
-
   function loadCertificates() {
     setIsLoadingCertificates(true)
     setStatus("Проверка CryptoPro Browser Plugin...")
     setSignature("")
-    setDiagnostics([])
-    addDiagnostic("Запрос списка сертификатов запущен.")
-
-    addDiagnostic("Ожидание инициализации CryptoPro Browser Plugin.")
 
     waitForCryptoPro()
-      .then(({ cadesplugin }) => {
-        addDiagnostic("Плагин инициализирован.")
-        return readCertificatesFromStore(cadesplugin)
-      })
+      .then(({ cadesplugin }) => readCertificatesFromStore(cadesplugin))
       .then((certData) => {
-        const { openedStoreTitle, count, certList, certsWithPrivateKey } = certData
-        addDiagnostic(`Открыто хранилище сертификатов: ${openedStoreTitle}.`)
-        addDiagnostic(`Всего сертификатов в хранилище: ${count}.`)
-        addDiagnostic("Хранилище сертификатов закрыто.")
+        const { openedStoreTitle, certList, certsWithPrivateKey } = certData
         setCertificates(certList)
 
         if (certList.length === 0) {
           setSelectedThumbprint("")
           setStatus(`Сертификаты не найдены в хранилище ${openedStoreTitle}.`)
-          addDiagnostic("Сертификаты не найдены.")
           return
         }
 
@@ -306,10 +268,7 @@ export default function App() {
         setSelectedThumbprint(preferredCert.thumbprint)
 
         setStatus(
-          `Найдено сертификатов: ${certList.length}. С закрытым ключом: ${certsWithPrivateKey}.`,
-        )
-        addDiagnostic(
-          `Сертификаты загружены: ${certList.length}, с закрытым ключом: ${certsWithPrivateKey}.`,
+          `Найдено сертификатов: ${certList.length}. С закрытым ключом: ${certsWithPrivateKey}.`
         )
       })
       .catch((error) => {
@@ -317,7 +276,6 @@ export default function App() {
         setSelectedThumbprint("")
         const errorMessage = getErrorMessage(error)
         setStatus(`Ошибка загрузки сертификатов: ${errorMessage}`)
-        addDiagnostic(`Ошибка загрузки сертификатов: ${errorMessage}`)
       })
       .finally(() => setIsLoadingCertificates(false))
   }
@@ -331,33 +289,34 @@ export default function App() {
       setStatus("Сначала выберите файл для подписи.")
       return
     }
-
     setIsSigning(true)
-    setStatus("Подписываю документ...")
+    setStatus("Формирую SIG-подпись...")
     setSignature("")
-    addDiagnostic(`Подписание файла "${documentFile.name}" запущено.`)
 
     waitForCryptoPro()
-      .then(({ cadesplugin }) => {
-        addDiagnostic("Плагин готов к подписанию.")
-
-        return documentFile.arrayBuffer().then((buffer) => ({
+      .then(({ cadesplugin }) =>
+        documentFile.arrayBuffer().then((buffer) => ({
           cadesplugin,
           base64Data: toBase64(buffer),
         }))
-      })
-      .then(({ cadesplugin, base64Data }) =>
-        createDetachedSignature(cadesplugin, selectedThumbprint, base64Data),
       )
-      .then((sign) => {
-        setSignature(sign)
-        setStatus("Файл успешно подписан.")
-        addDiagnostic("Файл подписан успешно.")
+      .then(({ cadesplugin, base64Data }) =>
+        createCadesDetachedSignature(cadesplugin, selectedThumbprint, base64Data)
+      )
+      .then((signatureBase64) => {
+        const signatureBytes = base64ToBytes(signatureBase64)
+        const signatureBlob = new Blob([signatureBytes], {
+          type: "application/pkcs7-signature",
+        })
+        const signatureFileName = getSignatureFileName(documentFile.name)
+
+        downloadBlob(signatureBlob, signatureFileName)
+        setSignature(`SIG-подпись сформирована и скачана: ${signatureFileName}`)
+        setStatus("Файл успешно подписан. SIG-подпись скачана.")
       })
       .catch((error) => {
         const errorMessage = getErrorMessage(error)
-        setStatus(`Ошибка подписи: ${errorMessage}`)
-        addDiagnostic(`Ошибка подписи: ${errorMessage}`)
+        setStatus(`Ошибка создания .sig: ${errorMessage}`)
       })
       .finally(() => setIsSigning(false))
   }
@@ -368,7 +327,7 @@ export default function App() {
         <p className="hero-kicker">CryptoPro Workspace</p>
         <h1 className="page-title">Центр электронной подписи</h1>
         <p className="hero-subtitle">
-          Выберите сертификат, загрузите документ и получите CAdES-BES подпись.
+          Выберите сертификат, загрузите файл и получите отдельную SIG-подпись.
         </p>
       </header>
 
@@ -433,13 +392,13 @@ export default function App() {
       <section className="card step-card">
         <h2 className="card-title">
           <span className="step-index">Шаг 3</span>
-          <span>Результат подписи</span>
+          <span>Результат SIG</span>
         </h2>
         <textarea
           className="signature-output"
           value={signature}
           readOnly
-          placeholder="Здесь будет отображена подпись"
+          placeholder="После успешной подписи .sig файл скачается автоматически"
         />
       </section>
 
@@ -448,50 +407,6 @@ export default function App() {
         <p className="status">{status}</p>
       </section>
 
-      <section className="card">
-        <h2 className="card-title">Проверка окружения</h2>
-        <div className="row">
-          <button
-            className="button"
-            type="button"
-            onClick={runEnvironmentCheck}
-          >
-            Перепроверить окружение
-          </button>
-        </div>
-        <div className="diagnostics">
-          {environmentInfo.length === 0 ? (
-            <p className="status">Проверка окружения не выполнена.</p>
-          ) : (
-            environmentInfo.map((item, index) => (
-              <p
-                className="diagnostic-line"
-                key={`${index}-${item}`}
-              >
-                {item}
-              </p>
-            ))
-          )}
-        </div>
-      </section>
-
-      <section className="card">
-        <h2 className="card-title">Диагностика</h2>
-        <div className="diagnostics">
-          {diagnostics.length === 0 ? (
-            <p className="status">Логи пока пустые. Нажмите "Выбрать сертификат".</p>
-          ) : (
-            diagnostics.map((item, index) => (
-              <p
-                className="diagnostic-line"
-                key={`${index}-${item}`}
-              >
-                {item}
-              </p>
-            ))
-          )}
-        </div>
-      </section>
     </main>
   )
 }
